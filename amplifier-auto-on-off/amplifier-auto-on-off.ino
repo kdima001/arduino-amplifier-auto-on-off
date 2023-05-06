@@ -35,10 +35,11 @@
 
 // порог тишины
 #define MIN_LEVEL 175
-#define HISTERESIL_LEVEL 5
+#define HISTERESIL_LEVEL 10
 // порог тока
-#define MIN_CURRENT 100
-#define HISTERESIL_CURRENT 50
+#define MIN_CURRENT 500
+#define HISTERESIL_CURRENT 100
+#define ZERO_CURRENT_VALUE 300
 
 // Переменные пуллинга
 unsigned long curMillis;
@@ -47,9 +48,9 @@ unsigned long prevMillis1 = 0;
 
 //---------------------------------------------------------------------------
 uint8_t SerialDBG, TimeON_RO;
-int level, currentMillis;
+uint16_t level, currentMillis;
 
-ACS712 acSensor(ACS712_05B, A1);
+ACS712 acSensor(A1, 5.0, 1023, 185);
 
 //---------------------------------------------------------------------------
 enum mSTATE_t {  //режим работы
@@ -62,7 +63,7 @@ enum mSTATE_t {  //режим работы
 mSTATE_t mSTATE;
 
 void PrintStatus(void) {
-    switch (mSTATE) {
+  switch (mSTATE) {
     case WAIT: Serial << F("WAIT") << endl; break;
     case ON_01: Serial << F("ON_01") << endl; break;
     case ON_11: Serial << F("ON_11") << endl; break;
@@ -77,28 +78,34 @@ void (*Reset)(void) = 0;  // Reset CON function
 //---------------------------------------------------------------------------
 // длинная буфера усреднения
 #define BUF_LENGTH 256
-// буфер усреднения
-int valuesBuffer[BUF_LENGTH];
+// буфера усреднения
+int valuesAudioBuffer[BUF_LENGTH];
+int valuesCurrentBuffer[BUF_LENGTH];
 int bufferPosition = 0;
 void ProcessSensors(void) {
   if (bufferPosition >= BUF_LENGTH) {
     bufferPosition = 0;
   }
-  //холостые чтения
   analogRead(A0);
   analogRead(A0);
   analogRead(A0);
-  // реальный сигнал в кольцевой буфер
-  valuesBuffer[bufferPosition] = analogRead(A0);
+  valuesAudioBuffer[bufferPosition] = analogRead(A0);
+
+  analogRead(A1);
+  analogRead(A1);
+  analogRead(A1);
+  valuesCurrentBuffer[bufferPosition] = acSensor.mA_peak2peak(50, 1);
+  valuesCurrentBuffer[bufferPosition] = valuesCurrentBuffer[bufferPosition] < ZERO_CURRENT_VALUE ? 0 : valuesCurrentBuffer[bufferPosition] - ZERO_CURRENT_VALUE;
   bufferPosition++;
 
-  uint32_t val = 0;
+  uint32_t valAudio = 0;
+  uint32_t valCurrent = 0;
   for (int i = 0; i < BUF_LENGTH; i++) {
-    val += valuesBuffer[i];
+    valAudio += valuesAudioBuffer[i];
+    valCurrent += valuesCurrentBuffer[i];
   }
-  level = val / BUF_LENGTH;
-
-  currentMillis = round(1000 * acSensor.getCurrentAC());
+  level = valAudio / BUF_LENGTH;
+  currentMillis = valCurrent / BUF_LENGTH;
 }
 
 //---------------------------------------------------------------------------
@@ -118,11 +125,11 @@ enum LM_t {
 LM_t LED_MODE;
 
 LED_MODE_t lm[5] = {
-  { 0, 0, 0,      0, 0, 0 },        //LM_WAIT,    не горит
-  { 1, 50, 500,  255, 0, 0 },  //LM_ON_01, 	редко мигает 0,5сек
-  { 0, 0, 0,      255, 0, 0 },      //LM_ON_11, 	горит
-  { 1, 50, 250,  255, 0, 0 },  //LM_OFF_10,  часто мигает
-  { 1, 50, 50,  255, 0, 0 }   //LM_OFF_11,  очень часто мигает
+  { 0, 0, 0, 0, 0, 0 },       //LM_WAIT,    не горит
+  { 1, 50, 500, 255, 0, 0 },  //LM_ON_01, 	редко мигает 0,5сек
+  { 0, 0, 0, 255, 0, 0 },     //LM_ON_11, 	горит
+  { 1, 50, 250, 255, 0, 0 },  //LM_OFF_10,  часто мигает
+  { 1, 50, 50, 255, 0, 0 }    //LM_OFF_11,  очень часто мигает
 };
 
 //---------------------------------------------------------------------------
@@ -160,20 +167,20 @@ void PrintSensors() {
 //---------------------------------------------------------------------------
 bool isSensorLevelUp(void) {
   bool sound = level > MIN_LEVEL + HISTERESIL_LEVEL;
-  bool current = false; //currentMillis > MIN_CURRENT + HISTERESIL_CURRENT;
+  bool current = currentMillis > MIN_CURRENT + HISTERESIL_CURRENT;
   return sound || current;
 }
 
 bool isSensorLevelDown(void) {
   bool sound = level < MIN_LEVEL - HISTERESIL_LEVEL;
-  bool current = true; //urrentMillis < MIN_CURRENT - HISTERESIL_CURRENT;
+  bool current = currentMillis < MIN_CURRENT - HISTERESIL_CURRENT;
   return sound && current;
 }
 
 uint8_t checkCount = 0;
-#define WAIT_CHECK_COUNT 200   // (2 сек)
-#define ON_11_CHECK_COUNT 20  // (2 сек)
-#define OFF_CHECK_COUNT 200   // (20 сек)
+#define WAIT_CHECK_COUNT 50
+#define ON_11_CHECK_COUNT 20
+#define OFF_CHECK_COUNT 200
 void ProcessState(void) {
   switch (mSTATE) {
     //********************
@@ -287,7 +294,7 @@ void setup() {
   pinMode(PRE, OUTPUT);
   digitalWrite(PRE, LOW);
   pinMode(AMP, OUTPUT);
-  digitalWrite(AMP, LOW);  
+  digitalWrite(AMP, LOW);
 
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -302,7 +309,8 @@ void setup() {
   LED_MODE = LM_WAIT;
 
   for (int i = 0; i < BUF_LENGTH; i++) {
-    valuesBuffer[i] = MIN_LEVEL;
+    valuesAudioBuffer[i] = MIN_LEVEL;
+    valuesCurrentBuffer[i] = ZERO_CURRENT_VALUE;
   }
 
   PrintStatus();
@@ -319,7 +327,7 @@ void loop() {
 
   //проверим на переполнение
   if (prevMillis1 > curMillis || prevMillisLED > curMillis) {
-    prevMillis1 = 0;   
+    prevMillis1 = 0;
     prevMillisLED = 0;
   }
 
