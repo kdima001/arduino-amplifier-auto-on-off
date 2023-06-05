@@ -27,8 +27,8 @@
 //индикаторы (исп. одноцветный диод)
 // LED_BUILTIN
 
-#define PRE 2  // нагрузка 1 - преды
-#define AMP 3  // нагрузка 2 - усилители
+#define PRE 9  // нагрузка 1 - преды
+#define AMP 8  // нагрузка 2 - усилители
 
 //константы интервалов в мсек
 #define POOL_INT 100
@@ -36,6 +36,7 @@
 // порог тишины
 #define MIN_LEVEL 175
 #define HISTERESIL_LEVEL 10
+#define ZERO_LEVEL 174
 // порог тока
 #define MIN_CURRENT 500
 #define HISTERESIL_CURRENT 100
@@ -90,6 +91,7 @@ void ProcessSensors(void) {
   analogRead(A0);
   analogRead(A0);
   valuesAudioBuffer[bufferPosition] = analogRead(A0);
+  valuesAudioBuffer[bufferPosition] = valuesAudioBuffer[bufferPosition] < ZERO_LEVEL ? 0 : valuesAudioBuffer[bufferPosition] - ZERO_LEVEL;
 
   analogRead(A1);
   analogRead(A1);
